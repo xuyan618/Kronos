@@ -167,6 +167,44 @@ print(pred_df.head())
 
 The `predict` method returns a pandas DataFrame containing the forecasted values for `open`, `high`, `low`, `close`, `volume`, and `amount`, indexed by the `y_timestamp` you provided.
 
+### Running the Kronos-Macro pipeline
+
+The integration CLI collects normalized Yahoo Finance observations, persists them under
+`data/processed/yahoo_observations.csv`, and writes a JSON report. FRED credentials are
+not required. Forecasting is optional and is only attempted when `--forecast-horizon` is
+provided; it requires the model dependencies and may download the configured checkpoints.
+
+```shell
+python run_macro_pipeline.py --ticker SPY --start 2025-01-01 --end 2025-06-01 \
+  --forecast-horizon 3 --report reports/spy.json
+```
+
+Risk and decision sections are calculated only from complete caller-supplied inputs.
+For example, add `--entry 500 --stop 490 --target 520 --direction long
+--equity 100000 --risk-budget 1000 --max-portfolio-risk 2000
+--contract-multiplier 1 --tick-size 0.01 --win-probability 0.6 --sample-count 100`.
+The report labels unavailable stages as `skipped` or `failed`, leaves confidence as
+`null` unless a component supplies it, and includes limitations and UTC timestamps.
+No forecast or probability is inferred when a provider, model, or evidence is absent.
+
+Typical offline/mock output has this shape:
+
+```json
+{
+  "data": {
+    "yahoo": {"status": "success", "rows": 15},
+    "macro": {"status": "skipped"},
+    "factor": {"status": "skipped"}
+  },
+  "forecast": {"status": "skipped", "reason": "forecast was not requested"},
+  "risk": {"status": "skipped", "reason": "risk inputs were not supplied"},
+  "decision": {"status": "skipped", "reason": "risk inputs were not supplied"},
+  "confidence": null,
+  "started_at": "2025-01-02T12:00:00Z",
+  "completed_at": "2025-01-02T12:00:01Z"
+}
+```
+
 For efficient processing of multiple time series, Kronos provides a `predict_batch` method that enables parallel prediction on multiple datasets simultaneously. This is particularly useful when you need to forecast multiple assets or time periods at once.
 
 ```python
@@ -325,7 +363,6 @@ If you use Kronos in your research, we would appreciate a citation to our [paper
 
 ## 📜 License 
 This project is licensed under the [MIT License](./LICENSE).
-
 
 
 
