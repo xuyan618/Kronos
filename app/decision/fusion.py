@@ -116,7 +116,11 @@ def generate_trade_signal(
     sentiment = 0.0
     n_texts = 0
     if scorer is not None:
-        res: SentimentResult = scorer.score_symbol_date(symbol, date, db_path, sources)
+        # db_path 为 None 时不传，让 scorer 用其默认数据库路径
+        if db_path is not None:
+            res: SentimentResult = scorer.score_symbol_date(symbol, date, db_path, sources)
+        else:
+            res: SentimentResult = scorer.score_symbol_date(symbol, date, sources=sources)
         sentiment = res.score
         n_texts = res.n_texts
 
