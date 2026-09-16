@@ -94,7 +94,9 @@ def compute_metrics(preds, acts, top_frac):
 def main():
     config_instance = get_config()
     config = config_instance.__dict__
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[bt] 推理设备: {device}"
+          f"{(' / ' + torch.cuda.get_device_name(0)) if torch.cuda.is_available() else ''}")
 
     base = config['dataset_path']
     best_model = os.path.join(

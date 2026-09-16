@@ -21,7 +21,9 @@ def setup_ddp():
         raise RuntimeError("torch.distributed is not available.")
 
     if torch.cuda.is_available():
-        dist.init_process_group(backend="nccl")
+        # Windows 上 NCCL 多进程支持有限，单卡用 gloo 更稳妥；Linux 仍用 nccl
+        backend = "gloo" if os.name == "nt" else "nccl"
+        dist.init_process_group(backend=backend)
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ["LOCAL_RANK"])

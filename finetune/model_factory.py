@@ -19,16 +19,22 @@ def build_tokenizer(config, finetuned=False):
         return KronosTokenizer.from_pretrained(path)
 
     # ---- Sequoia 扩展路径 ----
+    d_in_orig = config.get('d_in_orig', 6)
+    d_in_new = config.get('d_in_new', 1)
     if finetuned:
-        # 训练 tokenizer 阶段已保存为 extended 模型，直接按子类加载即可
-        # （save_pretrained 写入的 config.json 含 d_in_orig / d_in_new）
-        return KronosTokenizerExtended.from_pretrained(config['finetuned_tokenizer_path'])
-    else:
-        d_in_orig = config.get('d_in_orig', 6)
-        d_in_new = config.get('d_in_new', 1)
-        return KronosTokenizerExtended.from_pretrained_extended(
-            config['pretrained_tokenizer_path'], d_in_new, d_in_orig
-        )
+        fp = config['finetuned_tokenizer_path']
+        if os.path.exists(fp):
+            # 训练 tokenizer 阶段已保存为 extended 模型，直接按子类加载即可
+            # （save_pretrained 写入的 config.json 含 d_in_orig / d_in_new）
+            return KronosTokenizerExtended.from_pretrained(fp)
+        # 微调 tokenizer 产物缺失（例如全新环境尚未跑 tokenizer 微调）：
+        # 自动回退为 base 扩展版（新维度随机初始化，冻结），保证流水线可跑通。
+        # 若后续把微调产物放到 finetuned_tokenizer_path，会优先使用。
+        print(f"[model_factory] 微调 tokenizer 缺失({fp})，回退为 base 扩展版"
+              f"(新维度 d_in_new={d_in_new} 随机初始化)")
+    return KronosTokenizerExtended.from_pretrained_extended(
+        config['pretrained_tokenizer_path'], d_in_new, d_in_orig
+    )
 
 
 def build_predictor(config):

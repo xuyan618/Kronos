@@ -267,7 +267,7 @@ def main(config: dict):
 
     use_ddp = torch.cuda.is_available()
     if use_ddp:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
 
     if rank == 0:
         print(f"Fusion Predictor Model Size: {get_model_size(model.module if use_ddp else model)}")

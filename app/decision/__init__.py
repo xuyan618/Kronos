@@ -2,8 +2,24 @@
 
 from dataclasses import dataclass
 
+from app.decision.fusion import (
+    FusedSignal,
+    fuse_signals,
+    generate_trade_signal,
+    kronos_direction_from_forecast,
+)
 from app.risk import RiskResult
 from app.schemas import Evidence
+
+__all__ = [
+    "Decision",
+    "make_decision",
+    "decide",
+    "FusedSignal",
+    "fuse_signals",
+    "generate_trade_signal",
+    "kronos_direction_from_forecast",
+]
 
 
 @dataclass(frozen=True)

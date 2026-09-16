@@ -1,6 +1,11 @@
-numpy
+numpy==1.26.4
 pandas
-torch>=2.0.0
+
+# NOTE: torch is installed separately from the CUDA wheel index (cu121) BEFORE
+# running this file. Do NOT list torch here, or pip pulls the CPU build from
+# PyPI and overwrites the CUDA build (local version +cu121 sorts BELOW the
+# plain PyPI torch, so pip "upgrades" it to the CPU build).
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 einops==0.8.1
 huggingface_hub==0.33.1
@@ -10,6 +15,6 @@ tqdm==4.67.1
 safetensors==0.6.2
 yfinance>=0.2.40
 
-# 前期融合(Early Fusion)使用真实 FinBERT 文本嵌入时需要；
-# 不安装也能跑通通路（会自动降级为离线 hash 兜底嵌入）
+# Optional: only needed when using real FinBERT text embeddings for early fusion.
+# Pipeline still runs without it (falls back to offline hash embeddings).
 transformers>=4.30.0
