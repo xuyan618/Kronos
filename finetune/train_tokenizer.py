@@ -12,7 +12,10 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import comet_ml
+try:
+    import comet_ml
+except ImportError:
+    comet_ml = None
 
 # Ensure project root is in path
 sys.path.append("../")
@@ -55,7 +58,7 @@ def create_dataloaders(config: dict, rank: int, world_size: int):
         sampler=train_sampler,
         shuffle=False,  # Shuffle is handled by the sampler
         num_workers=config.get('num_workers', 2),
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         drop_last=True
     )
     val_loader = DataLoader(
@@ -64,7 +67,7 @@ def create_dataloaders(config: dict, rank: int, world_size: int):
         sampler=val_sampler,
         shuffle=False,
         num_workers=config.get('num_workers', 2),
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         drop_last=False
     )
     print(f"[Rank {rank}] Dataloaders created. Train steps/epoch: {len(train_loader)}, Val steps: {len(val_loader)}")
@@ -88,6 +91,7 @@ def train_model(model, device, config, save_dir, logger, rank, world_size):
         tuple: A tuple containing the trained model and a dictionary of results.
     """
     start_time = time.time()
+    model_ref = model.module if isinstance(model, DDP) else model
     if rank == 0:
         effective_bs = config['batch_size'] * world_size * config['accumulation_steps']
         print(f"[Rank {rank}] BATCHSIZE (per GPU): {config['batch_size']}")
@@ -187,8 +191,9 @@ def train_model(model, device, config, save_dir, logger, rank, world_size):
         # Reduce validation losses from all processes
         val_loss_sum_tensor = torch.tensor(tot_val_loss_sum_rank, device=device)
         val_count_tensor = torch.tensor(val_sample_count_rank, device=device)
-        dist.all_reduce(val_loss_sum_tensor, op=dist.ReduceOp.SUM)
-        dist.all_reduce(val_count_tensor, op=dist.ReduceOp.SUM)
+        if dist.is_initialized():
+            dist.all_reduce(val_loss_sum_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(val_count_tensor, op=dist.ReduceOp.SUM)
 
         avg_val_loss = val_loss_sum_tensor.item() / val_count_tensor.item() if val_count_tensor.item() > 0 else 0
 
@@ -204,12 +209,13 @@ def train_model(model, device, config, save_dir, logger, rank, world_size):
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 save_path = f"{save_dir}/checkpoints/best_model"
-                model.module.save_pretrained(save_path)
+                model_ref.save_pretrained(save_path)
                 print(f"Best model saved to {save_path} (Val Loss: {best_val_loss:.4f})")
                 if logger:
                     logger.log_model("best_model", save_path)
 
-        dist.barrier()  # Ensure all processes finish the epoch before starting the next one.
+        if dist.is_initialized():
+            dist.barrier()  # Ensure all processes finish the epoch before starting the next one.
 
     dt_result['best_val_loss'] = best_val_loss
     return model, dt_result
@@ -220,7 +226,7 @@ def main(config: dict):
     Main function to orchestrate the DDP training process.
     """
     rank, world_size, local_rank = setup_ddp()
-    device = torch.device(f"cuda:{local_rank}")
+    device = torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else torch.device("cpu")
     set_seed(config['seed'], rank)
 
     save_dir = os.path.join(config['save_path'], config['tokenizer_save_folder_name'])
@@ -245,15 +251,19 @@ def main(config: dict):
             comet_logger.log_parameters(config)
             print("Comet Logger Initialized.")
 
-    dist.barrier()  # Ensure save directory is created before proceeding
+    if dist.is_initialized():
+        dist.barrier()  # Ensure save directory is created before proceeding
 
-    # Model Initialization
-    model = KronosTokenizer.from_pretrained(config['pretrained_tokenizer_path'])
+    # Model Initialization (SEQUOIA=1 时加载 KronosTokenizerExtended，复用原权重并引入新维度)
+    from model_factory import build_tokenizer
+    model = build_tokenizer(config, finetuned=False)
     model.to(device)
-    model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
+    use_ddp = torch.cuda.is_available()
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
     if rank == 0:
-        print(f"Model Size: {get_model_size(model.module)}")
+        print(f"Model Size: {get_model_size(model.module if use_ddp else model)}")
 
     # Start Training
     _, dt_result = train_model(
@@ -273,9 +283,16 @@ def main(config: dict):
 
 
 if __name__ == '__main__':
-    # Usage: torchrun --standalone --nproc_per_node=NUM_GPUS train_tokenizer.py
-    if "WORLD_SIZE" not in os.environ:
-        raise RuntimeError("This script must be launched with `torchrun`.")
+    # GPU 训练需用 torchrun 启动；CPU 单进程可直接 `python` 运行
+    if torch.cuda.is_available() and "WORLD_SIZE" not in os.environ:
+        raise RuntimeError("GPU training must be launched with `torchrun`.")
 
-    config_instance = Config()
+    if os.environ.get("SEQUOIA_CPU") == "1":
+        from config_sequoia_cpu import get_config
+        config_instance = get_config()
+    elif os.environ.get("SEQUOIA") == "1":
+        from config_sequoia import get_config
+        config_instance = get_config()
+    else:
+        config_instance = Config()
     main(config_instance.__dict__)

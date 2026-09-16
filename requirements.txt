@@ -9,3 +9,7 @@ pandas==2.2.2
 tqdm==4.67.1
 safetensors==0.6.2
 yfinance>=0.2.40
+
+# 前期融合(Early Fusion)使用真实 FinBERT 文本嵌入时需要；
+# 不安装也能跑通通路（会自动降级为离线 hash 兜底嵌入）
+transformers>=4.30.0

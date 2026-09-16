@@ -20,16 +20,21 @@ def setup_ddp():
     if not dist.is_available():
         raise RuntimeError("torch.distributed is not available.")
 
-    dist.init_process_group(backend="nccl")
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    print(
-        f"[DDP Setup] Global Rank: {rank}/{world_size}, "
-        f"Local Rank (GPU): {local_rank} on device {torch.cuda.current_device()}"
-    )
-    return rank, world_size, local_rank
+    if torch.cuda.is_available():
+        dist.init_process_group(backend="nccl")
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        print(
+            f"[DDP Setup] Global Rank: {rank}/{world_size}, "
+            f"Local Rank (GPU): {local_rank} on device {torch.cuda.current_device()}"
+        )
+        return rank, world_size, local_rank
+
+    # CPU 单进程模式：不初始化分布式，后续 dist.* 调用均已守卫
+    print("[DDP Setup] CPU mode, single process (no DDP).")
+    return 0, 1, 0
 
 
 def cleanup_ddp():

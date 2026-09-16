@@ -481,7 +481,7 @@ def calc_time_stamps(x_timestamp):
 
 class KronosPredictor:
 
-    def __init__(self, model, tokenizer, device=None, max_context=512, clip=5):
+    def __init__(self, model, tokenizer, device=None, max_context=512, clip=5, extra_cols=None):
         self.tokenizer = tokenizer
         self.model = model
         self.max_context = max_context
@@ -490,6 +490,8 @@ class KronosPredictor:
         self.vol_col = 'volume'
         self.amt_vol = 'amount'
         self.time_cols = ['minute', 'hour', 'weekday', 'day', 'month']
+        # 扩展维度输出列（如 outstanding_share）；推理时缺失维度以 0 填充
+        self.out_cols = self.price_cols + [self.vol_col, self.amt_vol] + list(extra_cols or [])
         
         # Auto-detect device if not specified
         if device is None:
@@ -525,19 +527,19 @@ class KronosPredictor:
             raise ValueError(f"Price columns {self.price_cols} not found in DataFrame.")
 
         df = df.copy()
-        if self.vol_col not in df.columns:
-            df[self.vol_col] = 0.0  # Fill missing volume with zeros
-            df[self.amt_vol] = 0.0  # Fill missing amount with zeros
+        for col in self.out_cols:
+            if col not in df.columns:
+                df[col] = 0.0  # 缺失维度（如新增因子）以 0 填充
         if self.amt_vol not in df.columns and self.vol_col in df.columns:
             df[self.amt_vol] = df[self.vol_col] * df[self.price_cols].mean(axis=1)
 
-        if df[self.price_cols + [self.vol_col, self.amt_vol]].isnull().values.any():
-            raise ValueError("Input DataFrame contains NaN values in price or volume columns.")
+        if df[self.out_cols].isnull().values.any():
+            raise ValueError("Input DataFrame contains NaN values in required columns.")
 
         x_time_df = calc_time_stamps(x_timestamp)
         y_time_df = calc_time_stamps(y_timestamp)
 
-        x = df[self.price_cols + [self.vol_col, self.amt_vol]].values.astype(np.float32)
+        x = df[self.out_cols].values.astype(np.float32)
         x_stamp = x_time_df.values.astype(np.float32)
         y_stamp = y_time_df.values.astype(np.float32)
 
@@ -555,7 +557,7 @@ class KronosPredictor:
         preds = preds.squeeze(0)
         preds = preds * (x_std + 1e-5) + x_mean
 
-        pred_df = pd.DataFrame(preds, columns=self.price_cols + [self.vol_col, self.amt_vol], index=y_timestamp)
+        pred_df = pd.DataFrame(preds, columns=self.out_cols, index=y_timestamp)
         return pred_df
 
 
@@ -602,14 +604,14 @@ class KronosPredictor:
                 raise ValueError(f"DataFrame at index {i} is missing price columns {self.price_cols}.")
 
             df = df.copy()
-            if self.vol_col not in df.columns:
-                df[self.vol_col] = 0.0
-                df[self.amt_vol] = 0.0
+            for col in self.out_cols:
+                if col not in df.columns:
+                    df[col] = 0.0
             if self.amt_vol not in df.columns and self.vol_col in df.columns:
                 df[self.amt_vol] = df[self.vol_col] * df[self.price_cols].mean(axis=1)
 
-            if df[self.price_cols + [self.vol_col, self.amt_vol]].isnull().values.any():
-                raise ValueError(f"DataFrame at index {i} contains NaN values in price or volume columns.")
+            if df[self.out_cols].isnull().values.any():
+                raise ValueError(f"DataFrame at index {i} contains NaN values in required columns.")
 
             x_timestamp = x_timestamp_list[i]
             y_timestamp = y_timestamp_list[i]
@@ -617,7 +619,7 @@ class KronosPredictor:
             x_time_df = calc_time_stamps(x_timestamp)
             y_time_df = calc_time_stamps(y_timestamp)
 
-            x = df[self.price_cols + [self.vol_col, self.amt_vol]].values.astype(np.float32)
+            x = df[self.out_cols].values.astype(np.float32)
             x_stamp = x_time_df.values.astype(np.float32)
             y_stamp = y_time_df.values.astype(np.float32)
 
@@ -655,7 +657,7 @@ class KronosPredictor:
         pred_dfs = []
         for i in range(num_series):
             preds_i = preds[i] * (stds[i] + 1e-5) + means[i]
-            pred_df = pd.DataFrame(preds_i, columns=self.price_cols + [self.vol_col, self.amt_vol], index=y_timestamp_list[i])
+            pred_df = pd.DataFrame(preds_i, columns=self.out_cols, index=y_timestamp_list[i])
             pred_dfs.append(pred_df)
 
         return pred_dfs

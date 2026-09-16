@@ -1,9 +1,36 @@
+import os
 import pickle
 import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from config import Config
+
+
+def _resolve_config():
+    """
+    根据环境变量选择配置（优先级：SEQUOIA_FUSION > SEQUOIA_CPU > SEQUOIA > 默认 Config）。
+    这样 QlibDataset 才能读取到 config_sequoia 的 7 维 feature_list 与 sequoia 数据路径。
+    """
+    if os.environ.get("SEQUOIA_FUSION") == "1":
+        try:
+            from config_sequoia_fusion import get_config
+            return get_config()
+        except Exception:
+            pass
+    if os.environ.get("SEQUOIA_CPU") == "1":
+        try:
+            from config_sequoia_cpu import get_config
+            return get_config()
+        except Exception:
+            pass
+    if os.environ.get("SEQUOIA") == "1":
+        try:
+            from config_sequoia import get_config
+            return get_config()
+        except Exception:
+            pass
+    return Config()
 
 
 class QlibDataset(Dataset):
@@ -21,7 +48,7 @@ class QlibDataset(Dataset):
     """
 
     def __init__(self, data_type: str = 'train'):
-        self.config = Config()
+        self.config = _resolve_config()
         if data_type not in ['train', 'val']:
             raise ValueError("data_type must be 'train' or 'val'")
         self.data_type = data_type
