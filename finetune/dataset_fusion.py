@@ -85,8 +85,11 @@ class QlibFusionDataset(QlibDataset):
                         continue
                     emb = None
                     for off in range(0, 4):  # 0,1,2,3 天容差
-                        emb = dmap.get(rd - _td(days=off)) or dmap.get(rd + _td(days=off))
-                        if emb is not None:
+                        e = dmap.get(rd - _td(days=off))
+                        if e is None:
+                            e = dmap.get(rd + _td(days=off))
+                        if e is not None:
+                            emb = e
                             break
                     if emb is not None:
                         mat[row_i] = emb
