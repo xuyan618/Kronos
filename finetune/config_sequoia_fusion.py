@@ -12,6 +12,9 @@
     - finbert 真实 FinBERT [CLS] 嵌入（768 维，需要 pip install transformers）
     - hash    离线确定性哈希兜底（无依赖、无联网，用于跑通通路）
     - auto    优先 finbert，不可用时自动降级为 hash（默认）
+    默认 FinBERT 模型为「中文金融」yiyanghkust/finbert-tone-chinese
+    （bert-base-chinese，768 维 [CLS]），对 A 股因子文本比英文 ProsusAI/finbert 更贴合；
+    可用 TEXT_FINBERT_MODEL 覆盖。
 
 融合布局：
     FUSION_MODE=interleave|prepend
@@ -46,7 +49,7 @@ def get_config():
 
     # ---- 文本编码器 ----
     c.text_encoder_mode = _env_str("TEXT_ENCODER_MODE", "auto")
-    c.text_finbert_model = _env_str("TEXT_FINBERT_MODEL", "ProsusAI/finbert")
+    c.text_finbert_model = _env_str("TEXT_FINBERT_MODEL", "yiyanghkust/finbert-tone-chinese")
     c.text_hash_dim = _env_int("TEXT_HASH_DIM", 128)
     c.text_max_length = _env_int("TEXT_MAX_LENGTH", 64)
     c.text_encode_batch_size = _env_int("TEXT_ENCODE_BATCH", 16)

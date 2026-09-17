@@ -16,6 +16,11 @@ from app.kronos import ForecastConfig, KronosForecastAdapter
 from app.schemas import AccountRisk, Evidence, InstrumentMetadata, TradeSpec
 from app.risk import assess_risk
 from app.decision import make_decision
+from app.decision.fusion import (
+    generate_trade_signal,
+    kronos_direction_from_forecast,
+)
+from app.sentiment import FinbertSentimentScorer
 
 
 def _now() -> str:
@@ -121,6 +126,7 @@ def run_pipeline(
         "forecast": _status("skipped", reason="forecast was not requested"),
         "risk": _status("skipped", reason="risk inputs were not supplied"),
         "decision": _status("skipped", reason="risk inputs were not supplied"),
+        "signal": _status("skipped", reason="forecast was not requested"),
         "confidence": None,
         "limitations": [
             "Yahoo Finance data is external and may be delayed, revised, or unavailable.",
@@ -129,6 +135,9 @@ def run_pipeline(
         ],
     }
     if result.status is ProviderStatus.SUCCESS and symbol and forecast_horizon:
+        adapter = None
+        history = None
+        forecast = None
         try:
             history = _market_history(result.path, symbol)
             if adapter_factory is None:
@@ -145,6 +154,26 @@ def run_pipeline(
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             report["forecast"] = _status("failed", reason="forecast could not be produced", error=str(exc))
         report["confidence"] = report["forecast"].get("result", {}).get("confidence")
+
+        # 融合信号：Kronos 方向 × FinBERT 情感（独立于预测成败，失败不影响其它层）
+        if adapter is not None and history is not None and forecast is not None:
+            try:
+                last_close = float(history["close"].iloc[-1])
+                as_of_date = history["timestamp"].iloc[-1].strftime("%Y-%m-%d")
+                kronos_dir = kronos_direction_from_forecast(forecast, last_close)
+                scorer = FinbertSentimentScorer(cache_path="app/sentiment/sentiment_cache.pkl")
+                signal = generate_trade_signal(
+                    symbol, as_of_date, history,
+                    adapter=adapter, scorer=scorer,
+                    horizon=forecast_horizon, kronos_direction=kronos_dir,
+                )
+                report["signal"] = _status(
+                    "success", symbol=symbol, date=as_of_date, **signal.__dict__
+                )
+            except Exception as exc:  # 情感层失败不应连累预测/风险层
+                report["signal"] = _status(
+                    "failed", reason="sentiment fusion could not be produced", error=str(exc)
+                )
     if risk_inputs:
         try:
             risk, decision = _risk_report({**risk_inputs, "symbol": symbol or risk_inputs.get("symbol", "unknown")})

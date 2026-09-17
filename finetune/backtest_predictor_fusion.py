@@ -20,6 +20,7 @@ import sys
 import pickle
 
 import numpy as np
+import pandas as pd
 import torch
 
 sys.path.append('.')
@@ -124,9 +125,19 @@ def main():
     time_feature_list = config_instance.time_feature_list
     print(f"[bt] 特征={feature_list}  时间特征={time_feature_list}")
 
-    print("[bt] 读取测试数据...")
-    with open(os.path.join(base, 'test_data.pkl'), 'rb') as f:
-        raw = pickle.load(f)
+    print("[bt] 读取数据(拼接 train/val/test 以补全预测上下文)...")
+    raw = {}
+    for split in ('train_data.pkl', 'val_data.pkl', 'test_data.pkl'):
+        sp = os.path.join(base, split)
+        if not os.path.exists(sp):
+            continue
+        with open(sp, 'rb') as f:
+            d = pickle.load(f)
+        for s, g in d.items():
+            if s in raw:
+                raw[s] = pd.concat([raw[s], g]).sort_index()
+            else:
+                raw[s] = g.sort_index()
     with open(os.path.join(base, 'text_embeddings.pkl'), 'rb') as f:
         tpack = pickle.load(f)
     tdata = tpack.get('data', {})
@@ -152,7 +163,11 @@ def main():
     for s, df in raw.items():
         all_dates.update(df.index)
     all_dates = sorted(all_dates)
-    bt_dates = all_dates[-MAX_WINDOW:]
+    # 仅对「测试区间」发预测，但上下文用完整历史(含 train/val)，避免窗口塌缩
+    TEST_START = pd.Timestamp(os.environ.get("TEST_RANGE_START", "2026-04-01"))
+    TEST_END = pd.Timestamp(os.environ.get("TEST_RANGE_END", "2026-09-14"))
+    bt_dates = sorted(d for d in all_dates if TEST_START <= d <= TEST_END)
+    bt_dates = bt_dates[-MAX_WINDOW:]
     print(f"[bt] 收集区间: {bt_dates[0].date()} ~ {bt_dates[-1].date()} （{len(bt_dates)} 交易日）")
 
     symbols = list(raw.keys())
@@ -220,9 +235,9 @@ def main():
                 ric = rank_ic(pred_sig, act_daily[-1])
                 print(f"  {dstr}: n={len(batch_aret)} rankIC={ric:.3f}")
 
-    # ---- 多窗口 × 多阈值 汇报 ----
-    print("\n==================== 融合模型回测：窗口×阈值对比 ====================")
-    print(f"{'窗口':>6} {'TOP%':>5} {'RankIC':>8} {'IC>0':>6} {'多头':>8} {'多空':>8} {'基准':>8}")
+    # ---- 多窗口 × 多阈值 汇报（含信号取负对照） ----
+    print("\n==================== 融合模型回测：窗口×阈值对比（原始信号） ====================")
+    print(f"{'窗口':>6} {'TOP%':>5} {'RankIC':>8} {'IC>0':>6} {'多头':>8} {'多空':>8} {'基准':>8} {'天数':>4}")
     saved = None
     for W in WINDOWS:
         for tf in TOP_FRACS:
@@ -230,12 +245,22 @@ def main():
             a = act_daily[-W:]
             m = compute_metrics(p, a, tf)
             print(f"{W:>6} {int(tf*100):>4}% {m['ic_mean']:>8.4f} {m['ic_pos']:>6.2%} "
-                  f"{m['long_total']:>8.2%} {m['ls_total']:>8.2%} {m['mkt_total']:>8.2%}")
+                  f"{m['long_total']:>8.2%} {m['ls_total']:>8.2%} {m['mkt_total']:>8.2%} {m['n_days']:>4}")
             if W == 120 and abs(tf - 0.20) < 1e-9:
                 saved = m
+
+    print("\n==================== 信号取负对照（验证是否符号反向） ====================")
+    print(f"{'窗口':>6} {'TOP%':>5} {'RankIC':>8} {'IC>0':>6} {'多头':>8} {'多空':>8} {'基准':>8} {'天数':>4}")
+    for W in WINDOWS:
+        for tf in TOP_FRACS:
+            p = [-x for x in pred_daily[-W:]]
+            a = act_daily[-W:]
+            m = compute_metrics(p, a, tf)
+            print(f"{W:>6} {int(tf*100):>4}% {m['ic_mean']:>8.4f} {m['ic_pos']:>6.2%} "
+                  f"{m['long_total']:>8.2%} {m['ls_total']:>8.2%} {m['mkt_total']:>8.2%} {m['n_days']:>4}")
     print("======================================================================")
     print("说明: 信号=模型自回归预测 t 日 close 的 z 分值(方向代理)；多头=前Frac等权；")
-    print("      多空=前Frac-后Frac；基准=全市场等权。数据为 2026 同段非时间切分，属近期区间评估。")
+    print("      多空=前Frac-后Frac；基准=全市场等权。测试区间为严格时间外(OOS)。")
 
     out_dir = os.path.join(config['save_path'], 'sequoia_predictor_fusion', 'backtest')
     os.makedirs(out_dir, exist_ok=True)

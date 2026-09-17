@@ -98,19 +98,25 @@ def generate_trade_signal(
     horizon: int = 5,
     sources: Sequence[str] = ("factor", "news"),
     weights: Mapping[str, float] | None = None,
+    kronos_direction: float | None = None,
 ) -> FusedSignal:
     """端到端：给定标的/日期/历史价，产出 Kronos×情感 融合交易信号。
 
     - adapter: KronosForecastAdapter 实例（为空则 Kronos 方向取 0）。
     - scorer: FinbertSentimentScorer 实例（为空则情感分取 0）。
     - history: 含 ["close"] 及 KronosForecastAdapter 所需列的 DataFrame。
+    - kronos_direction: 已算好的 Kronos 方向（避免重复推理）；未给且 adapter
+      非空时，由 adapter 重新预测推导。
     """
     # 1) Kronos 方向
-    kronos_dir = 0.0
-    if adapter is not None:
-        fc = adapter.forecast(history, horizon)
-        last_close = float(history["close"].iloc[-1])
-        kronos_dir = kronos_direction_from_forecast(fc, last_close)
+    if kronos_direction is not None:
+        kronos_dir = float(kronos_direction)
+    else:
+        kronos_dir = 0.0
+        if adapter is not None:
+            fc = adapter.forecast(history, horizon)
+            last_close = float(history["close"].iloc[-1])
+            kronos_dir = kronos_direction_from_forecast(fc, last_close)
 
     # 2) 情感方向
     sentiment = 0.0

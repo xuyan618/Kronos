@@ -4,7 +4,8 @@ text_encoder.py —— 把文本变成可拼进 predictor 的嵌入向量。
 提供两种实现：
 
 1. FinBertTextEncoder（真实路径，用户选定）
-   使用 ProsusAI/finbert 取 [CLS] 向量（768 维），带金融情感/情绪语义。
+   使用中文金融 FinBERT（默认 yiyanghkust/finbert-tone-chinese，bert-base-chinese）取 [CLS] 向量
+   （768 维），带中文金融情感/情绪语义，对 A 股因子文本比英文 ProsusAI/finbert 更贴合。
    需要 `pip install transformers`（已加入 requirements.txt）。
 
 2. HashTextEncoder（离线兜底）
@@ -22,7 +23,7 @@ import hashlib
 
 import numpy as np
 
-FINBERT_DEFAULT = "ProsusAI/finbert"
+FINBERT_DEFAULT = "yiyanghkust/finbert-tone-chinese"
 
 
 class HashTextEncoder:

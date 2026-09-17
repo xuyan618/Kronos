@@ -100,10 +100,11 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
     train_loader, val_loader, train_dataset, valid_dataset = create_dataloaders(config, rank, world_size)
 
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        [pp for pp in model.parameters() if pp.requires_grad],
         lr=config['predictor_learning_rate'],
         betas=(config['adam_beta1'], config['adam_beta2']),
-        weight_decay=config['adam_weight_decay'],
+        weight_decay=float(os.environ.get(
+            "FUSION_WEIGHT_DECAY", config.get('adam_weight_decay', 0.01))),
     )
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=config['predictor_learning_rate'],
@@ -264,6 +265,15 @@ def main(config: dict):
         use_modality_emb=config.get('use_modality_emb', True),
         device=device,
     )
+
+    # 可选：冻结 backbone 以缓解过拟合（仅训练文本通道 + head + dep_layer + norm）
+    if os.environ.get("FREEZE_BACKBONE") == "1":
+        frozen = 0
+        for _n, _p in model.backbone.named_parameters():
+            if _n.split(".")[0] in ("transformer", "embedding", "time_emb"):
+                _p.requires_grad = False
+                frozen += 1
+        print(f"[fusion] 冻结 backbone 参数 {frozen} 个（仅训练文本通道+head+dep_layer+norm）")
 
     use_ddp = torch.cuda.is_available()
     if use_ddp:

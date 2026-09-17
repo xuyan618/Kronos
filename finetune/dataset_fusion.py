@@ -45,7 +45,25 @@ class QlibFusionDataset(QlibDataset):
 
         data = (pack or {}).get('data', {}) if pack else {}
 
-        # 3) 构建 symbol -> [n_rows, text_dim] 的按行对齐矩阵
+        from datetime import datetime as _dt, timedelta as _td
+
+        def _parse(d):
+            try:
+                return _dt.strptime(str(d)[:10], '%Y-%m-%d').date()
+            except Exception:
+                return None
+
+        # 预建 (symbol -> {date: emb})，便于按 ±N 天容差查找
+        sym_date_emb = {}
+        for symbol, sym_pack in data.items():
+            dmap = {}
+            for d, e in zip(sym_pack['dates'], sym_pack['emb']):
+                pd_ = _parse(d)
+                if pd_ is not None:
+                    dmap[pd_] = e
+            sym_date_emb[symbol] = dmap
+
+        # 3) 构建 symbol -> [n_rows, text_dim] 的按行对齐矩阵（日期容差 ±3 天）
         self.text_by_symbol = {}
         filled_rows = 0
         total_rows = 0
@@ -56,25 +74,28 @@ class QlibFusionDataset(QlibDataset):
             n_rows = len(df_raw)
             mat = np.zeros((n_rows, self.text_dim), dtype=np.float32)
 
-            sym_pack = data.get(symbol)
-            if sym_pack is not None:
-                dates = sym_pack['dates']
-                embs = sym_pack['emb']
-                date_to_row = {d: i for i, d in enumerate(dates)}
+            dmap = sym_date_emb.get(symbol)
+            if dmap:
                 try:
-                    idx_keys = df_raw.index.strftime('%Y-%m-%d')
+                    row_dates = [_parse(d) for d in df_raw.index]
                 except Exception:
-                    idx_keys = [str(d)[:10] for d in df_raw.index]
-                for row_i, dkey in enumerate(idx_keys):
-                    j = date_to_row.get(dkey)
-                    if j is not None:
-                        mat[row_i] = embs[j]
+                    row_dates = [None] * n_rows
+                for row_i, rd in enumerate(row_dates):
+                    if rd is None:
+                        continue
+                    emb = None
+                    for off in range(0, 4):  # 0,1,2,3 天容差
+                        emb = dmap.get(rd - _td(days=off)) or dmap.get(rd + _td(days=off))
+                        if emb is not None:
+                            break
+                    if emb is not None:
+                        mat[row_i] = emb
                         filled_rows += 1
             total_rows += n_rows
             self.text_by_symbol[symbol] = mat
 
         if total_rows:
-            print(f"[fusion-dataset] 文本覆盖率: {filled_rows}/{total_rows} 行 "
+            print(f"[fusion-dataset] 文本覆盖率(±3天容差): {filled_rows}/{total_rows} 行 "
                   f"({filled_rows / total_rows:.1%})，text_dim={self.text_dim}")
 
     def __getitem__(self, idx):
