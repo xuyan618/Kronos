@@ -63,7 +63,7 @@ class QlibFusionDataset(QlibDataset):
                     dmap[pd_] = e
             sym_date_emb[symbol] = dmap
 
-        # 3) 构建 symbol -> [n_rows, text_dim] 的按行对齐矩阵（日期容差 ±3 天）
+        # 3) 构建 symbol -> [n_rows, text_dim] 的按行对齐矩阵（仅过去/当日: -3..0 天, 杜绝未来泄漏）
         self.text_by_symbol = {}
         filled_rows = 0
         total_rows = 0
@@ -84,10 +84,9 @@ class QlibFusionDataset(QlibDataset):
                     if rd is None:
                         continue
                     emb = None
-                    for off in range(0, 4):  # 0,1,2,3 天容差
+                    # 仅向过去/当日对齐(-3..0 天), 不使用 rd+1/+2/+3 的未来文本, 避免信息泄漏
+                    for off in range(0, 4):  # 0,1,2,3 天容差(仅 rd-3..rd)
                         e = dmap.get(rd - _td(days=off))
-                        if e is None:
-                            e = dmap.get(rd + _td(days=off))
                         if e is not None:
                             emb = e
                             break
@@ -98,7 +97,7 @@ class QlibFusionDataset(QlibDataset):
             self.text_by_symbol[symbol] = mat
 
         if total_rows:
-            print(f"[fusion-dataset] 文本覆盖率(±3天容差): {filled_rows}/{total_rows} 行 "
+            print(f"[fusion-dataset] 文本覆盖率(仅过去/当日 -3..0 天容差): {filled_rows}/{total_rows} 行 "
                   f"({filled_rows / total_rows:.1%})，text_dim={self.text_dim}")
 
     def __getitem__(self, idx):
