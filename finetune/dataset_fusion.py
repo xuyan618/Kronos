@@ -121,6 +121,16 @@ class QlibFusionDataset(QlibDataset):
         x = (x - x_mean) / (x_std + 1e-5)
         x = np.clip(x, -self.config.clip, self.config.clip)
 
+        # 次日收益率标签（带符号），用于收益率回归头；无未来泄漏（由窗口内相邻 close 算出）
+        close_raw = df['close'].values.astype(np.float64)
+        cw = close_raw[start_idx:end_idx]
+        ret = np.zeros(self.window, dtype=np.float32)
+        for i in range(self.window - 1):
+            if cw[i] > 0 and cw[i + 1] > 0:
+                r = cw[i + 1] / cw[i] - 1.0
+                if np.isfinite(r):
+                    ret[i] = float(min(max(r, -0.5), 0.5))  # 截断极端收益，稳定 MSE
+
         # 与窗口逐日对齐的文本嵌入
         mat = self.text_by_symbol.get(symbol)
         if mat is None:
@@ -132,4 +142,4 @@ class QlibFusionDataset(QlibDataset):
                 seg = np.concatenate([seg, pad], axis=0)
             text = seg.astype(np.float32)
 
-        return torch.from_numpy(x), torch.from_numpy(x_stamp), torch.from_numpy(text)
+        return torch.from_numpy(x), torch.from_numpy(x_stamp), torch.from_numpy(text), torch.from_numpy(ret)

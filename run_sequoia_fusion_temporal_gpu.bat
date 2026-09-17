@@ -77,7 +77,7 @@ echo == 2. Rebuild full-history text embeddings ==
 
 REM ---- Windows: single-GPU, skip torchrun, set dist env vars manually ----
 set "USE_LIBUV=0"
-set "MASTER_ADDR=localhost"
+set "MASTER_ADDR=127.0.0.1"
 set "MASTER_PORT=29500"
 set "RANK=0"
 set "WORLD_SIZE=1"

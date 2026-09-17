@@ -4,7 +4,7 @@ backtest_predictor_fusion.py —— 融合模型「近期区间」回测（自�
 做法：
   对每只股票最靠后的交易日 t：
     - 取上下文窗口 [t-L, t-1]（L=90），按训练方式 z-score 归一；
-    - 用模型自回归 decode（decode_s1/decode_s2 + argmax，确定性）预测 t 日 close 的 z 分值（方向信号）；
+    - 用模型收益率回归头（predict_return）直接预测 t 日「次日收益率(带符号)」作为方向信号（符号内生于训练目标）；
     - 实际次日收益用原始 close：close[t]/close[t-1]-1。
   一次推理收集预测后，汇报多个「回测窗口长度」× 多个「TOP_FRAC」下的：
     - 日度 RankIC 均值 / IC>0 占比；
@@ -219,13 +219,9 @@ def main():
                 ss = torch.tensor(np.stack(batch_stamp[pos:end]), dtype=torch.float32, device=device)
                 ts = torch.tensor(np.stack(batch_text[pos:end]), dtype=torch.float32, device=device)
                 t0, t1 = tokenizer.encode(xs, half=True)
-                s1_logits, price_ctx = model.decode_s1(t0, t1, ss, text_emb=ts)
-                ps1 = s1_logits[:, -1, :].argmax(-1)
-                ps1_seq = ps1.unsqueeze(1)
-                s2_logits = model.decode_s2(price_ctx, ps1_seq)
-                ps2 = s2_logits[:, -1, :].argmax(-1)
-                feat_dec = tokenizer.decode([ps1_seq, ps2.unsqueeze(1)], half=True)
-                pred_sig[pos:end] = feat_dec[:, 0, CLOSE_IDX].detach().cpu().numpy()
+                # 直接用收益率回归头预测「次日收益率(带符号)」作为方向信号
+                ret_pred = model.predict_return(t0, t1, ss, text_emb=ts)
+                pred_sig[pos:end] = ret_pred.detach().cpu().numpy()
                 pos = end
 
             dates_daily.append(dt)
@@ -259,8 +255,8 @@ def main():
             print(f"{W:>6} {int(tf*100):>4}% {m['ic_mean']:>8.4f} {m['ic_pos']:>6.2%} "
                   f"{m['long_total']:>8.2%} {m['ls_total']:>8.2%} {m['mkt_total']:>8.2%} {m['n_days']:>4}")
     print("======================================================================")
-    print("说明: 信号=模型自回归预测 t 日 close 的 z 分值(方向代理)；多头=前Frac等权；")
-    print("      多空=前Frac-后Frac；基准=全市场等权。测试区间为严格时间外(OOS)。")
+    print("说明: 信号=模型收益率头直接预测的「次日收益率(带符号)」，符号内生于训练目标（无需取负）；")
+    print("      多头=前Frac等权；多空=前Frac-后Frac；基准=全市场等权。测试区间为严格时间外(OOS)。")
 
     out_dir = os.path.join(config['save_path'], 'sequoia_predictor_fusion', 'backtest')
     os.makedirs(out_dir, exist_ok=True)

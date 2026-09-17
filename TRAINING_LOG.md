@@ -233,6 +233,18 @@ A/B/C/D 四项改进全部生效。**核心结论：模型原始预测方向是�
 
 ---
 
+## Run 4（进行中）— 目标重构：预测「次日收益率(带符号)」而非 close 水平
+
+- **日期**：2026-09-17（Run 3 验证取负结论被推翻后启动）
+- **动机**：Run 1-3 的回测信号都是「模型自回归预测的 close 水平(z 分)当方向代理」。close 水平预测器天然偏**均值回归**，其方向与次日收益的相关性随市场体制漂移（Run 2 测试窗为负、Run 3 验证窗为混合→符号非平稳）。从根上解决需让模型**直接学带符号收益率**。
+- **改动（不重写 tokenizer，挂独立收益率回归头）**：
+  1. `model/kronos_fusion.py`：新增 `return_head = Linear(d_model, 1)`（零初始化）；`forward` 额外返回 `ret_logits = return_head(price_ctx)`（[B,T,1]）；新增 `predict_return()` 直接返回 `return_head(price_ctx)[:,-1,0]`（context 后一天收益率）。
+  2. `dataset_fusion.py`：`__getitem__` 用窗口内相邻 `close` 计算「次日收益率」标签 `ret`（截断 ±50%），返回 4 元组 `(x, x_stamp, text, ret)`。
+  3. `train_predictor_fusion.py`：训练/验证损失 = `token CE + FUSION_RETURN_LOSS_WEIGHT * MSE(return_head, ret*RETURN_TARGET_SCALE)`；默认 `RETURN_TARGET_SCALE=100`、`FUSION_RETURN_LOSS_WEIGHT=2.0`（环境变量可调）。日志增打 `RetLoss`。
+  4. `backtest_predictor_fusion.py`：信号改用 `model.predict_return()` 输出（带符号收益率），不再用 close decode + 取负对照（取负列保留作 sanity check，但预期原始即为正）。
+- **预期**：RankIC 在测试窗与验证窗应**同时为正且不需取负**；若仍弱，则可能是冻结 backbone 限制了方向信息 → 试 `FREEZE_BACKBONE=0` 重训。
+- **状态**：⏳ 待跑 `run_sequoia_fusion_temporal_gpu.bat` + `backtest_val_period.bat`，粘贴结果填表。
+
 ## 模板（复制此块新增 Run）
 
 ```markdown

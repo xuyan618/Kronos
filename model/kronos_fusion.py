@@ -101,6 +101,13 @@ class KronosFusion(nn.Module, PyTorchModelHubMixin):
         if self.text_proj.bias is not None:
             nn.init.zeros_(self.text_proj.bias)
 
+        # ---- 收益率回归头：直接预测「次日收益率(带符号)」 ----
+        # 解决 close 水平预测器天然偏均值回归、方向符号随体制漂移的问题。
+        # 训练时作为辅助监督（与价格 token CE 联合），回测时此头输出即方向信号。
+        self.return_head = nn.Linear(d_model, 1)
+        nn.init.zeros_(self.return_head.weight)
+        nn.init.zeros_(self.return_head.bias)
+
     # ---------- 便捷代理：让训练脚本能像用 Kronos 一样访问 head / embedding ----------
     @property
     def head(self):
@@ -211,7 +218,8 @@ class KronosFusion(nn.Module, PyTorchModelHubMixin):
 
         x2 = b.dep_layer(price_ctx, sibling_embed, key_padding_mask=price_padding_mask)
         s2_logits = b.head.cond_forward(x2)
-        return s1_logits, s2_logits
+        ret_logits = self.return_head(price_ctx)  # [B, T, 1] 次日收益率预测（带符号）
+        return s1_logits, s2_logits, ret_logits
 
     # ---------- 自回归推理 ----------
     def decode_s1(self, s1_ids, s2_ids, stamp=None, text_emb=None, padding_mask=None):
@@ -227,6 +235,15 @@ class KronosFusion(nn.Module, PyTorchModelHubMixin):
         sibling_embed = self.backbone.embedding.emb_s1(s1_ids)
         x2 = self.backbone.dep_layer(price_ctx, sibling_embed, key_padding_mask=padding_mask)
         return self.backbone.head.cond_forward(x2)
+
+    def predict_return(self, s1_ids, s2_ids, stamp=None, text_emb=None, padding_mask=None):
+        """返回每个价格位置上的「次日收益率」预测（带符号标量）。
+
+        取最后一个价格位置 -> 预测 context 之后那一天的收益率，作回测方向信号。
+        """
+        s1_logits, price_ctx = self.decode_s1(s1_ids, s2_ids, stamp, text_emb, padding_mask)
+        ret = self.return_head(price_ctx)  # [B, T, 1]
+        return ret[:, -1, 0]  # [B] 预测 context 后一天的收益率
 
 
 def build_fusion_from_pretrained(pretrained_path, text_dim=768, fusion_mode="interleave",

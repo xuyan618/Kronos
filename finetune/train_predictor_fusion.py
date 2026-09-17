@@ -18,6 +18,7 @@ import time
 from time import gmtime, strftime
 
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
@@ -51,6 +52,11 @@ if os.environ.get("SEQUOIA_DETERMINISTIC") == "1":
         torch.use_deterministic_algorithms(True, warn_only=True)
     except Exception:
         pass
+
+
+# 收益率回归头：直接监督「次日收益率(带符号)」，消除 close 水平预测的方向歧义。
+RETURN_TARGET_SCALE = float(os.environ.get("RETURN_TARGET_SCALE", "100.0"))   # 收益放大到 ~O(1)，与 token CE 量级相当
+RETURN_LOSS_WEIGHT = float(os.environ.get("FUSION_RETURN_LOSS_WEIGHT", "2.0"))
 
 
 def get_text_dim(config):
@@ -96,6 +102,7 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
     if rank == 0:
         print(f"Effective BATCHSIZE per GPU: {config['batch_size']}, "
               f"Total: {config['batch_size'] * world_size}")
+        print(f"[fusion] return-head: scale={RETURN_TARGET_SCALE}, loss_weight={RETURN_LOSS_WEIGHT}")
 
     train_loader, val_loader, train_dataset, valid_dataset = create_dataloaders(config, rank, world_size)
 
@@ -123,7 +130,7 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
         train_dataset.set_epoch_seed(epoch_idx * 10000 + rank)
         valid_dataset.set_epoch_seed(0)
 
-        for i, (batch_x, batch_x_stamp, batch_text) in enumerate(train_loader):
+        for i, (batch_x, batch_x_stamp, batch_text, batch_ret) in enumerate(train_loader):
             batch_x = batch_x.to(device, non_blocking=True)
             batch_x_stamp = batch_x_stamp.to(device, non_blocking=True)
             batch_text = batch_text.to(device, non_blocking=True)
@@ -140,6 +147,11 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
             loss, s1_loss, s2_loss = model_ref.head.compute_loss(
                 logits[0], logits[1], token_out[0], token_out[1]
             )
+            # 收益率回归头监督（带符号次日收益）：目标 = 窗口内相邻 close 收益，放大到 ~O(1)
+            ret_logits = logits[2]
+            ret_target = (batch_ret[:, :-1] * RETURN_TARGET_SCALE).to(device, non_blocking=True)
+            ret_loss = F.mse_loss(ret_logits[:, :, 0], ret_target)
+            loss = loss + RETURN_LOSS_WEIGHT * ret_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -151,7 +163,8 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
                 lr = optimizer.param_groups[0]['lr']
                 print(
                     f"[Rank {rank}, Epoch {epoch_idx + 1}/{config['epochs']}, "
-                    f"Step {i + 1}/{len(train_loader)}] LR {lr:.6f}, Loss: {loss.item():.4f}"
+                    f"Step {i + 1}/{len(train_loader)}] LR {lr:.6f}, Loss: {loss.item():.4f}, "
+                    f"RetLoss: {ret_loss.item():.4f}"
                 )
             if rank == 0 and logger:
                 logger.log_metric('train_fusion_loss_batch', loss.item(), step=batch_idx_global)
@@ -165,7 +178,7 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
         tot_val_loss_sum_rank = 0.0
         val_batches_processed_rank = 0
         with torch.no_grad():
-            for batch_x, batch_x_stamp, batch_text in val_loader:
+            for batch_x, batch_x_stamp, batch_text, batch_ret in val_loader:
                 batch_x = batch_x.to(device, non_blocking=True)
                 batch_x_stamp = batch_x_stamp.to(device, non_blocking=True)
                 batch_text = batch_text.to(device, non_blocking=True)
@@ -178,9 +191,13 @@ def train_model(model, tokenizer, device, config, save_dir, logger, rank, world_
                     token_in[0], token_in[1], batch_x_stamp[:, :-1, :],
                     text_emb=batch_text[:, :-1, :],
                 )
-                val_loss, _, _ = model_ref.head.compute_loss(
+                token_ce, _, _ = model_ref.head.compute_loss(
                     logits[0], logits[1], token_out[0], token_out[1]
                 )
+                ret_logits = logits[2]
+                ret_target = (batch_ret[:, :-1] * RETURN_TARGET_SCALE).to(device, non_blocking=True)
+                ret_loss = F.mse_loss(ret_logits[:, :, 0], ret_target)
+                val_loss = token_ce + RETURN_LOSS_WEIGHT * ret_loss
                 tot_val_loss_sum_rank += val_loss.item()
                 val_batches_processed_rank += 1
                 if val_batches_processed_rank >= config['n_val_iter']:
