@@ -12,7 +12,7 @@
 - 价格归一化（lookback 均值/标准差、clip 5.0）+ tokenizer 编码 完全照搬回测。
 - 输出 ``predict_return`` ≈ 次日收益率×RETURN_TARGET_SCALE(默认 100)。
   单标的决策需把它标定到 [-1,1]：``direction = clip(pred_frac / FUSION_DIRECTION_SCALE, -1, 1)``，
-  其中 ``pred_frac = pred / 100``，``FUSION_DIRECTION_SCALE`` 默认 0.03（预测 +3% → 满仓多）。
+  其中 ``pred_frac = pred / 100``，``FUSION_DIRECTION_SCALE`` 默认 0.0134（校准结论：≈2σ，预测 +1.34% → 满仓多）。
   ⚠️ 该刻度是单标的下的标定旋钮，需按实盘校准；回测本身是截面排序、不依赖此刻度。
 
 依赖：torch / transformers（FinBERT），以及 finetune 下的 model / text_source / text_encoder。
@@ -34,7 +34,7 @@ import pandas as pd
 FUSION_L = 90                      # 上下文长度（与训练/回测一致）
 FUSION_CLIP = 5.0                 # z-score 截断（与回测一致）
 RETURN_TARGET_SCALE = float(os.environ.get("RETURN_TARGET_SCALE", "100"))  # 须与训练一致
-FUSION_DIRECTION_SCALE = float(os.environ.get("FUSION_DIRECTION_SCALE", "0.03"))  # 单标的标定刻度
+FUSION_DIRECTION_SCALE = float(os.environ.get("FUSION_DIRECTION_SCALE", "0.0134"))  # 单标的标定刻度（校准结论：≈2σ）
 
 _TEXT_ENCODER_MODE = "finbert"     # 强制 FinBERT(768)，避免 hash(128) 维度不匹配 text_proj
 _FINBERT_MODEL = os.environ.get("TEXT_FINBERT_MODEL", "yiyanghkust/finbert-tone-chinese")
@@ -155,7 +155,7 @@ def _get_text_lookup(symbol: str) -> Dict[str, np.ndarray]:
     return lut
 
 
-def predict_fusion_direction(symbol: str, history: pd.DataFrame, as_of_date: str) -> float:
+def predict_fusion_direction(symbol: str, history: pd.DataFrame, as_of_date: str, scale: float | None = None) -> float:
     """返回该标的在 ``as_of_date`` 之后一天的融合模型方向信号 ∈ [-1, 1]。
 
     - 历史不足 FUSION_L+1 行时返回 0.0（hold）。
@@ -228,12 +228,12 @@ def predict_fusion_direction(symbol: str, history: pd.DataFrame, as_of_date: str
     pred_ret_frac = pred_ret_pct / RETURN_TARGET_SCALE        # ≈ 次日收益率
 
     # 单标的标定到 [-1, 1]（截面排序以外的使用场景需要）
-    scale = FUSION_DIRECTION_SCALE
+    scale = scale if scale is not None else FUSION_DIRECTION_SCALE
     direction = max(-1.0, min(1.0, pred_ret_frac / scale)) if scale > 0 else 0.0
     return float(direction)
 
 
-def last_predicted_return(symbol: str, history: pd.DataFrame, as_of_date: str):
+def last_predicted_return(symbol: str, history: pd.DataFrame, as_of_date: str, scale: float | None = None):
     """调试用：返回 (direction, predicted_return_frac)，便于校准 FUSION_DIRECTION_SCALE。"""
     _load_model_and_tokenizer()
     import torch
@@ -287,5 +287,6 @@ def last_predicted_return(symbol: str, history: pd.DataFrame, as_of_date: str):
         ret = _model.predict_return(t0, t1, ss, text_emb=ts_t)
     pred_ret_pct = float(ret.detach().cpu().numpy()[0])
     pred_ret_frac = pred_ret_pct / RETURN_TARGET_SCALE
-    direction = max(-1.0, min(1.0, pred_ret_frac / FUSION_DIRECTION_SCALE)) if FUSION_DIRECTION_SCALE > 0 else 0.0
+    _scale = scale if scale is not None else FUSION_DIRECTION_SCALE
+    direction = max(-1.0, min(1.0, pred_ret_frac / _scale)) if _scale > 0 else 0.0
     return direction, pred_ret_frac
