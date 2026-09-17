@@ -155,8 +155,33 @@ def run_pipeline(
             report["forecast"] = _status("failed", reason="forecast could not be produced", error=str(exc))
         report["confidence"] = report["forecast"].get("result", {}).get("confidence")
 
-        # 融合信号：Kronos 方向 × FinBERT 情感（独立于预测成败，失败不影响其它层）
-        if adapter is not None and history is not None and forecast is not None:
+        # ---- 方向信号 ----
+        # 方案1（USE_FUSION_MODEL=1）：全量融合 —— 用训练好的 KronosFusion(价格+文本)
+        #   直接出次日收益率方向，与回测完全一致；不再叠加 FinBERT 情感（避免文本重复计数）。
+        # 默认：原始 KronosForecastAdapter 方向 × FinBERT 情感（0.6/0.4）。
+        use_fusion = os.environ.get("USE_FUSION_MODEL", "0") == "1"
+
+        if use_fusion and history is not None:
+            try:
+                as_of_date = history["timestamp"].iloc[-1].strftime("%Y-%m-%d")
+                from app.kronos.fusion_adapter import predict_fusion_direction
+                kronos_dir = predict_fusion_direction(symbol, history, as_of_date)
+                signal = generate_trade_signal(
+                    symbol, as_of_date, history,
+                    kronos_direction=kronos_dir,  # 不传 adapter/scorer -> sentiment=0 -> combined=kronos_dir
+                )
+                report["forecast"] = _status(
+                    "success", symbol=symbol, source="fusion_model", kronos_direction=kronos_dir,
+                )
+                report["signal"] = _status(
+                    "success", symbol=symbol, date=as_of_date,
+                    source="fusion_model", **signal.__dict__
+                )
+            except Exception as exc:
+                report["signal"] = _status(
+                    "failed", reason="fusion model signal could not be produced", error=str(exc)
+                )
+        elif adapter is not None and history is not None and forecast is not None:
             try:
                 last_close = float(history["close"].iloc[-1])
                 as_of_date = history["timestamp"].iloc[-1].strftime("%Y-%m-%d")
