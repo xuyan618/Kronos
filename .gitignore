@@ -75,3 +75,4 @@ temp/
 tmp/
 .python-version
 /data
+/outputs

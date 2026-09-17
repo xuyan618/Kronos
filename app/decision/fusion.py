@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
@@ -47,7 +49,15 @@ def kronos_direction_from_forecast(
     if last_close in (0.0, None) or last_close != last_close:
         return 0.0
     ret = (fwd - last_close) / last_close
-    return max(-clip, min(clip, float(ret)))
+    direction = max(-clip, min(clip, float(ret)))
+    # 符号校正开关（默认关闭）。
+    # 回测(backtest_predictor_fusion.py)对「早期融合模型 sequoia_predictor_fusion」的预测 z 分
+    # 证实方向与次日收益反向，取负后 RankIC 翻正。但本函数使用的是原始 KronosForecastAdapter
+    # 的预测收益，尚未单独验证方向，故默认不翻转。若后续对原始 Kronos 回测确认同样反向，或改为
+    # 路由融合模型输出，再置 KRONOS_DIRECTION_NEGATE=1。
+    if os.environ.get("KRONOS_DIRECTION_NEGATE", "0") == "1":
+        direction = -direction
+    return direction
 
 
 def fuse_signals(
